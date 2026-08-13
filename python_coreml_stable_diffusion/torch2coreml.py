@@ -128,6 +128,15 @@ def _materialize_module_from_state_dict(module, state_dict):
     return load_state_dict_summary
 
 
+def _cast_floating_inputs_to_module_dtype(inputs, module):
+    module_dtype = next(module.parameters()).dtype
+    converted_inputs = inputs.copy()
+    for name, value in inputs.items():
+        if isinstance(value, torch.Tensor) and torch.is_floating_point(value):
+            converted_inputs[name] = value.to(dtype=module_dtype)
+    return converted_inputs
+
+
 def _load_unet_checkpoint(unet_model, checkpoint_path):
     if not os.path.isfile(checkpoint_path):
         raise FileNotFoundError(
@@ -866,6 +875,11 @@ def convert_unet(pipe, args, model_name = None):
                     baseline_sample_unet_inputs["mid_block_additional_residual"] = sample_residual_input
                 else:
                     baseline_sample_unet_inputs["down_block_additional_residuals"] += (sample_residual_input, )
+
+        sample_unet_inputs = _cast_floating_inputs_to_module_dtype(
+            sample_unet_inputs,
+            reference_unet,
+        )
 
         sample_unet_inputs_spec = {
             k: (v.shape, v.dtype)

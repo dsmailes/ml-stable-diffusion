@@ -137,6 +137,23 @@ class TestSDXLLightningConversion(unittest.TestCase):
             state_dict["0.weight"].untyped_storage().data_ptr(),
         )
 
+    def test_trace_inputs_follow_module_dtype_without_casting_integers(self):
+        module = torch.nn.Linear(4, 3).to(dtype=torch.float16)
+        inputs = {
+            "sample": torch.rand(1, 4),
+            "token_ids": torch.tensor([[1, 2, 3]], dtype=torch.int64),
+        }
+
+        converted = torch2coreml._cast_floating_inputs_to_module_dtype(
+            inputs,
+            module,
+        )
+
+        self.assertEqual(converted["sample"].dtype, torch.float16)
+        self.assertEqual(converted["token_ids"].dtype, torch.int64)
+        self.assertEqual(inputs["sample"].dtype, torch.float32)
+        self.assertIsNot(converted, inputs)
+
     @mock.patch.object(torch2coreml.DiffusionPipeline, "from_pretrained")
     def test_pipeline_download_uses_pinned_base_revision(self, from_pretrained_mock):
         args = torch2coreml.parser_spec().parse_args([
