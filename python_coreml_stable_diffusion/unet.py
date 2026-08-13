@@ -47,6 +47,10 @@ def _match_tensor_dtype(tensor, reference):
     return tensor.to(dtype=reference.dtype)
 
 
+def _match_module_input_dtype(tensor, module):
+    return _match_tensor_dtype(tensor, next(module.parameters()))
+
+
 class CrossAttention(nn.Module):
     """ Apple Silicon friendly version of `diffusers.models.attention.CrossAttention`
     """
@@ -986,6 +990,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin):
             sample = 2 * sample - 1.0
 
         # 2. pre-process
+        sample = _match_module_input_dtype(sample, self.conv_in)
         sample = self.conv_in(sample)
 
         # 3. down
@@ -1099,6 +1104,7 @@ class UNet2DConditionModelXL(UNet2DConditionModel):
             sample = 2 * sample - 1.0
 
         # 2. pre-process
+        sample = _match_module_input_dtype(sample, self.conv_in)
         sample = self.conv_in(sample)
 
         # 3. down

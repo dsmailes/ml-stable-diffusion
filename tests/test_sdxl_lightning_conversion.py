@@ -177,6 +177,17 @@ class TestSDXLLightningConversion(unittest.TestCase):
         self.assertEqual(embedding.dtype, torch.float32)
         self.assertEqual(converted.shape, embedding.shape)
 
+    def test_module_input_follows_convolution_weight_dtype(self):
+        convolution = torch.nn.Conv2d(4, 8, 3, padding=1).to(
+            dtype=torch.float16)
+        value = torch.rand(1, 4, 8, 8, dtype=torch.float32)
+
+        converted = unet_module._match_module_input_dtype(value, convolution)
+
+        self.assertEqual(converted.dtype, torch.float16)
+        self.assertEqual(value.dtype, torch.float32)
+        self.assertEqual(converted.shape, value.shape)
+
     @unittest.skipUnless(torch.backends.mps.is_available(), "MPS is unavailable")
     def test_fp16_module_can_be_traced_on_mps_and_returned_to_cpu(self):
         module = torch.nn.Conv2d(4, 8, 3, padding=1).to(dtype=torch.float16)
