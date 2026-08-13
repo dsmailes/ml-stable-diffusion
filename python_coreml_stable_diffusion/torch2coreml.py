@@ -19,6 +19,7 @@ from diffusers import (
 )
 import gc
 
+from accelerate import init_empty_weights
 import logging
 from safetensors.torch import load_file
 
@@ -111,6 +112,22 @@ def _get_sdxl_time_ids(negative_time_ids, positive_time_ids, batch_size):
     )
 
 
+def _materialize_module_from_state_dict(module, state_dict):
+    load_state_dict_summary = module.load_state_dict(
+        state_dict,
+        strict=True,
+        assign=True,
+    )
+    tensors = list(module.named_parameters()) + list(module.named_buffers())
+    meta_tensors = [name for name, tensor in tensors if tensor.is_meta]
+    if meta_tensors:
+        raise RuntimeError(
+            "State dictionary left tensors on the meta device: "
+            + ", ".join(meta_tensors[:10])
+        )
+    return load_state_dict_summary
+
+
 def _load_unet_checkpoint(unet_model, checkpoint_path):
     if not os.path.isfile(checkpoint_path):
         raise FileNotFoundError(
@@ -119,7 +136,10 @@ def _load_unet_checkpoint(unet_model, checkpoint_path):
 
     logger.info(f"Loading UNet checkpoint from {checkpoint_path}")
     state_dict = load_file(checkpoint_path, device="cpu")
-    load_state_dict_summary = unet_model.load_state_dict(state_dict, strict=True)
+    load_state_dict_summary = _materialize_module_from_state_dict(
+        unet_model,
+        state_dict,
+    )
     logger.info(f"Loaded UNet checkpoint: {load_state_dict_summary}")
     del state_dict
 
@@ -799,10 +819,15 @@ def convert_unet(pipe, args, model_name = None):
         else:
             unet_cls = unet.UNet2DConditionModel
 
-        reference_unet = unet_cls(**pipe.unet.config).eval()
+        with init_empty_weights(include_buffers=True):
+            reference_unet = unet_cls(**pipe.unet.config).eval()
 
-        load_state_dict_summary = reference_unet.load_state_dict(
-            pipe.unet.state_dict())
+        source_state_dict = pipe.unet.state_dict()
+        load_state_dict_summary = _materialize_module_from_state_dict(
+            reference_unet,
+            source_state_dict,
+        )
+        del source_state_dict
 
         if args.unet_support_controlnet:
             from .unet import calculate_conv2d_output_shape
@@ -848,6 +873,10 @@ def convert_unet(pipe, args, model_name = None):
         }
         logger.info(f"Sample UNet inputs spec: {sample_unet_inputs_spec}")
 
+        if not args.check_output_correctness:
+            del pipe.unet
+            gc.collect()
+
         # JIT trace
         logger.info("JIT tracing..")
         reference_unet = torch.jit.trace(reference_unet,
@@ -860,9 +889,8 @@ def convert_unet(pipe, args, model_name = None):
             reference_out = reference_unet(*sample_unet_inputs.values())[0].numpy()
             report_correctness(baseline_out, reference_out,
                                "unet baseline to reference PyTorch")
-
-        del pipe.unet
-        gc.collect()
+            del pipe.unet
+            gc.collect()
 
         coreml_sample_unet_inputs = {
             k: v.numpy().astype(np.float16)
@@ -1314,11 +1342,13 @@ def get_pipeline(args):
     unet_model = None
     if getattr(args, "unet_checkpoint", None):
         logger.info("Initializing replacement UNet from base model configuration")
-        unet_model = UNet2DConditionModel.from_config(
+        unet_config = UNet2DConditionModel.load_config(
             model_version,
             subfolder="unet",
             **download_options,
-        ).to(dtype=torch.float16)
+        )
+        with init_empty_weights(include_buffers=True):
+            unet_model = UNet2DConditionModel.from_config(unet_config)
         _load_unet_checkpoint(unet_model, args.unet_checkpoint)
 
     pipeline_overrides = {}

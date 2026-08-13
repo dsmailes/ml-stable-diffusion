@@ -6,6 +6,8 @@
 import unittest
 from unittest import mock
 
+from accelerate import init_empty_weights
+import torch
 from python_coreml_stable_diffusion import torch2coreml
 
 
@@ -93,6 +95,8 @@ class TestSDXLLightningConversion(unittest.TestCase):
     ):
         unet = mock.Mock()
         state_dict = {"down_blocks.0.weight": object()}
+        unet.named_parameters.return_value = []
+        unet.named_buffers.return_value = []
         load_file_mock.return_value = state_dict
 
         torch2coreml._load_unet_checkpoint(unet, "/models/lightning.safetensors")
@@ -102,7 +106,36 @@ class TestSDXLLightningConversion(unittest.TestCase):
             "/models/lightning.safetensors",
             device="cpu",
         )
-        unet.load_state_dict.assert_called_once_with(state_dict, strict=True)
+        unet.load_state_dict.assert_called_once_with(
+            state_dict,
+            strict=True,
+            assign=True,
+        )
+
+    def test_state_dict_materializes_meta_module_without_copying_parameters(self):
+        source = torch.nn.Sequential(
+            torch.nn.Linear(4, 3),
+            torch.nn.LayerNorm(3),
+        ).to(dtype=torch.float16)
+        state_dict = source.state_dict()
+
+        with init_empty_weights(include_buffers=True):
+            target = torch.nn.Sequential(
+                torch.nn.Linear(4, 3),
+                torch.nn.LayerNorm(3),
+            )
+
+        self.assertTrue(all(parameter.is_meta for parameter in target.parameters()))
+
+        torch2coreml._materialize_module_from_state_dict(target, state_dict)
+
+        self.assertTrue(all(not parameter.is_meta for parameter in target.parameters()))
+        self.assertTrue(all(not buffer.is_meta for buffer in target.buffers()))
+        self.assertEqual(target[0].weight.dtype, torch.float16)
+        self.assertEqual(
+            target[0].weight.untyped_storage().data_ptr(),
+            state_dict["0.weight"].untyped_storage().data_ptr(),
+        )
 
     @mock.patch.object(torch2coreml.DiffusionPipeline, "from_pretrained")
     def test_pipeline_download_uses_pinned_base_revision(self, from_pretrained_mock):
