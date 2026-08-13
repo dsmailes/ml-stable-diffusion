@@ -8,7 +8,10 @@ from unittest import mock
 
 from accelerate import init_empty_weights
 import torch
-from python_coreml_stable_diffusion import torch2coreml
+from python_coreml_stable_diffusion import (
+    torch2coreml,
+    unet as unet_module,
+)
 
 
 class TestSDXLLightningConversion(unittest.TestCase):
@@ -153,6 +156,16 @@ class TestSDXLLightningConversion(unittest.TestCase):
         self.assertEqual(converted["token_ids"].dtype, torch.int64)
         self.assertEqual(inputs["sample"].dtype, torch.float32)
         self.assertIsNot(converted, inputs)
+
+    def test_time_embedding_follows_sample_dtype(self):
+        embedding = torch.rand(1, 320, dtype=torch.float32)
+        sample = torch.rand(1, 4, 8, 8, dtype=torch.float16)
+
+        converted = unet_module._match_tensor_dtype(embedding, sample)
+
+        self.assertEqual(converted.dtype, torch.float16)
+        self.assertEqual(embedding.dtype, torch.float32)
+        self.assertEqual(converted.shape, embedding.shape)
 
     @mock.patch.object(torch2coreml.DiffusionPipeline, "from_pretrained")
     def test_pipeline_download_uses_pinned_base_revision(self, from_pretrained_mock):

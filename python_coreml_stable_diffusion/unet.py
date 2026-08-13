@@ -43,6 +43,10 @@ WARN_MSG = \
     "This `nn.Module` is intended for Apple Silicon deployment only. " \
     "PyTorch-specific optimizations and training is disabled"
 
+def _match_tensor_dtype(tensor, reference):
+    return tensor.to(dtype=reference.dtype)
+
+
 class CrossAttention(nn.Module):
     """ Apple Silicon friendly version of `diffusers.models.attention.CrossAttention`
     """
@@ -970,7 +974,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin):
         *additional_residuals,
     ):
         # 0. Project (or look-up) time embeddings
-        t_emb = self.time_proj(timestep)
+        t_emb = _match_tensor_dtype(self.time_proj(timestep), sample)
         emb = self.time_embedding(t_emb)
 
         # 1. center input if necessary
@@ -1052,7 +1056,7 @@ class UNet2DConditionModelXL(UNet2DConditionModel):
         *additional_residuals,
     ):
         # 0. Project time embeddings
-        t_emb = self.time_proj(timestep)
+        t_emb = _match_tensor_dtype(self.time_proj(timestep), sample)
         emb = self.time_embedding(t_emb)
 
         aug_emb = None
@@ -1065,7 +1069,10 @@ class UNet2DConditionModelXL(UNet2DConditionModel):
             assert time_ids is not None
             assert text_embeds is not None
 
-            time_embeds = self.add_time_proj(time_ids.flatten())
+            time_embeds = _match_tensor_dtype(
+                self.add_time_proj(time_ids.flatten()),
+                text_embeds,
+            )
             time_embeds = time_embeds.reshape((text_embeds.shape[0], -1))
 
             add_embeds = torch.concat([text_embeds, time_embeds], dim=-1)
