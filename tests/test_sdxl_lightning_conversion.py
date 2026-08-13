@@ -39,9 +39,12 @@ class TestSDXLLightningConversion(unittest.TestCase):
             "stabilityai/stable-diffusion-xl-base-1.0",
             "--trace-device",
             "MPS",
+            "--trace-precision",
+            "FLOAT32",
         ])
 
         self.assertEqual(args.trace_device, "MPS")
+        self.assertEqual(args.trace_precision, "FLOAT32")
 
     def test_batch_one_sdxl_time_ids_contain_only_positive_conditioning(self):
         negative = [1, 2, 3, 4, 5, 6]
@@ -202,6 +205,21 @@ class TestSDXLLightningConversion(unittest.TestCase):
         parameter = next(traced.parameters())
         self.assertEqual(parameter.device.type, "cpu")
         self.assertEqual(parameter.dtype, torch.float16)
+
+    def test_fp16_module_can_be_promoted_and_traced_on_cpu(self):
+        module = torch.nn.Conv2d(4, 8, 3, padding=1).to(dtype=torch.float16)
+        sample = torch.rand(1, 4, 8, 8, dtype=torch.float16)
+
+        traced = torch2coreml._trace_module_on_device(
+            module,
+            [sample],
+            "CPU",
+            trace_precision="FLOAT32",
+        )
+
+        parameter = next(traced.parameters())
+        self.assertEqual(parameter.device.type, "cpu")
+        self.assertEqual(parameter.dtype, torch.float32)
 
     def test_only_conditioning_embeddings_are_promoted_to_float32(self):
         module = torch.nn.Module()

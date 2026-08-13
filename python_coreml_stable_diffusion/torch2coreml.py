@@ -148,14 +148,29 @@ def _cast_floating_inputs_to_module_dtype(inputs, module):
     return converted_inputs
 
 
-def _trace_module_on_device(module, sample_inputs, trace_device):
+def _trace_module_on_device(
+    module,
+    sample_inputs,
+    trace_device,
+    trace_precision="MODEL",
+):
     device_name = trace_device.lower()
     if device_name == "mps" and not torch.backends.mps.is_available():
         raise RuntimeError("MPS tracing was requested but MPS is unavailable")
 
     device = torch.device(device_name)
-    module = module.to(device)
-    device_inputs = [value.to(device) for value in sample_inputs]
+    trace_dtype = torch.float32 if trace_precision == "FLOAT32" else None
+    if trace_dtype is None:
+        module = module.to(device)
+    else:
+        module = module.to(device=device, dtype=trace_dtype)
+
+    device_inputs = [
+        value.to(device=device, dtype=trace_dtype)
+        if trace_dtype is not None and torch.is_floating_point(value)
+        else value.to(device)
+        for value in sample_inputs
+    ]
     traced_module = torch.jit.trace(
         module,
         device_inputs,
@@ -940,6 +955,7 @@ def convert_unet(pipe, args, model_name = None):
             reference_unet,
             list(sample_unet_inputs.values()),
             args.trace_device,
+            trace_precision=args.trace_precision,
         )
         logger.info("Done.")
 
@@ -1575,6 +1591,15 @@ def parser_spec():
         help=(
             "The PyTorch device used for JIT tracing. MPS allows FP16 "
             "convolutions while reducing host memory during large conversions."
+        ),
+    )
+    parser.add_argument(
+        "--trace-precision",
+        choices=("MODEL", "FLOAT32"),
+        default="MODEL",
+        help=(
+            "The precision used during JIT tracing. FLOAT32 can be selected "
+            "after low-memory FP16 model assembly for Core ML compatibility."
         ),
     )
     parser.add_argument(
