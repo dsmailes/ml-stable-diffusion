@@ -13,6 +13,45 @@ public enum StableDiffusionScheduler {
     case pndmScheduler
     /// Scheduler that uses a second order DPM-Solver++ algorithm
     case dpmSolverMultistepScheduler
+    /// First-order Euler scheduler for few-step distilled models
+    case eulerDiscreteScheduler
+}
+
+@available(iOS 16.2, macOS 13.1, *)
+func makeTimeStepInput(
+    timeStep: Int,
+    batchSize: Int
+) -> MLShapedArray<Float32> {
+    precondition(batchSize > 0)
+    return MLShapedArray(
+        scalars: [Float32](repeating: Float32(timeStep), count: batchSize),
+        shape: [batchSize]
+    )
+}
+
+@available(iOS 16.2, macOS 13.1, *)
+func prepareLatentForUnet(
+    _ latent: MLShapedArray<Float32>,
+    useClassifierFreeGuidance: Bool
+) -> MLShapedArray<Float32> {
+    guard useClassifierFreeGuidance else { return latent }
+    return MLShapedArray(
+        concatenating: [latent, latent],
+        alongAxis: 0
+    )
+}
+
+@available(iOS 16.2, macOS 13.1, *)
+func makeConditioningBatch(
+    positive: MLShapedArray<Float32>,
+    negative: MLShapedArray<Float32>,
+    useClassifierFreeGuidance: Bool
+) -> MLShapedArray<Float32> {
+    guard useClassifierFreeGuidance else { return positive }
+    return MLShapedArray(
+        concatenating: [negative, positive],
+        alongAxis: 0
+    )
 }
 
 /// RNG compatible with StableDiffusionPipeline
@@ -209,7 +248,16 @@ public struct StableDiffusionPipeline: StableDiffusionPipelineProtocol {
 
         // Encode the input prompt and negative prompt
         let promptEmbedding = try textEncoder.encode(config.prompt)
-        let negativePromptEmbedding = try textEncoder.encode(config.negativePrompt)
+        let modelEmbedding: MLShapedArray<Float32>
+        if config.useClassifierFreeGuidance {
+            let negativePromptEmbedding = try textEncoder.encode(config.negativePrompt)
+            modelEmbedding = MLShapedArray(
+                concatenating: [negativePromptEmbedding, promptEmbedding],
+                alongAxis: 0
+            )
+        } else {
+            modelEmbedding = promptEmbedding
+        }
 
         if reduceMemory {
             textEncoder.unloadResources()
@@ -217,18 +265,14 @@ public struct StableDiffusionPipeline: StableDiffusionPipelineProtocol {
 
         // Convert to Unet hidden state representation
         // Concatenate the prompt and negative prompt embeddings
-        let concatEmbedding = MLShapedArray<Float32>(
-            concatenating: [negativePromptEmbedding, promptEmbedding],
-            alongAxis: 0
-        )
-
-        let hiddenStates = useMultilingualTextEncoder ? concatEmbedding : toHiddenStates(concatEmbedding)
+        let hiddenStates = useMultilingualTextEncoder ? modelEmbedding : toHiddenStates(modelEmbedding)
 
         /// Setup schedulers
         let scheduler: [Scheduler] = (0..<config.imageCount).map { _ in
             switch config.schedulerType {
             case .pndmScheduler: return PNDMScheduler(stepCount: config.stepCount)
             case .dpmSolverMultistepScheduler: return DPMSolverMultistepScheduler(stepCount: config.stepCount, timeStepSpacing: config.schedulerTimestepSpacing)
+            case .eulerDiscreteScheduler: return EulerDiscreteScheduler(stepCount: config.stepCount)
             }
         }
 
@@ -246,9 +290,9 @@ public struct StableDiffusionPipeline: StableDiffusionPipelineProtocol {
         // Convert cgImage for ControlNet into MLShapedArray
         let controlNetConds = try config.controlNetInputs.map { cgImage in
             let shapedArray = try cgImage.planarRGBShapedArray(minValue: 0.0, maxValue: 1.0)
-            return MLShapedArray(
-                concatenating: [shapedArray, shapedArray],
-                alongAxis: 0
+            return prepareLatentForUnet(
+                shapedArray,
+                useClassifierFreeGuidance: config.useClassifierFreeGuidance
             )
         }
 
@@ -258,8 +302,15 @@ public struct StableDiffusionPipeline: StableDiffusionPipelineProtocol {
 
             // Expand the latents for classifier-free guidance
             // and input to the Unet noise prediction model
-            let latentUnetInput = latents.map {
-                MLShapedArray<Float32>(concatenating: [$0, $0], alongAxis: 0)
+            let latentUnetInput = latents.enumerated().map { index, latent in
+                let scaled = scheduler[index].scaleModelInput(
+                    latent,
+                    timeStep: t
+                )
+                return prepareLatentForUnet(
+                    scaled,
+                    useClassifierFreeGuidance: config.useClassifierFreeGuidance
+                )
             }
 
             // Before Unet, execute controlNet and add the output into Unet inputs
@@ -279,7 +330,9 @@ public struct StableDiffusionPipeline: StableDiffusionPipelineProtocol {
                 additionalResiduals: additionalResiduals
             )
 
-            noise = performGuidance(noise, config.guidanceScale)
+            if config.useClassifierFreeGuidance {
+                noise = performGuidance(noise, config.guidanceScale)
+            }
 
             // Have the scheduler compute the previous (t-1) latent
             // sample given the predicted noise and current sample

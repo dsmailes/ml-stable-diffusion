@@ -176,6 +176,7 @@ public struct StableDiffusionXLPipeline: StableDiffusionPipelineProtocol {
             switch config.schedulerType {
             case .pndmScheduler: return PNDMScheduler(stepCount: config.stepCount)
             case .dpmSolverMultistepScheduler: return DPMSolverMultistepScheduler(stepCount: config.stepCount, timeStepSpacing: config.schedulerTimestepSpacing)
+            case .eulerDiscreteScheduler: return EulerDiscreteScheduler(stepCount: config.stepCount)
             }
         }
 
@@ -208,8 +209,15 @@ public struct StableDiffusionXLPipeline: StableDiffusionPipelineProtocol {
         for (step,t) in timeSteps.enumerated() {
             // Expand the latents for classifier-free guidance
             // and input to the Unet noise prediction model
-            let latentUnetInput = latents.map {
-                MLShapedArray<Float32>(concatenating: [$0, $0], alongAxis: 0)
+            let latentUnetInput = latents.enumerated().map { index, latent in
+                let scaled = scheduler[index].scaleModelInput(
+                    latent,
+                    timeStep: t
+                )
+                return prepareLatentForUnet(
+                    scaled,
+                    useClassifierFreeGuidance: config.useClassifierFreeGuidance
+                )
             }
 
             // Switch to refiner if specified
@@ -239,7 +247,9 @@ public struct StableDiffusionXLPipeline: StableDiffusionPipelineProtocol {
                 geometryConditioning: geometryConditioning
             )
 
-            noise = performGuidance(noise, config.guidanceScale)
+            if config.useClassifierFreeGuidance {
+                noise = performGuidance(noise, config.guidanceScale)
+            }
 
             // Have the scheduler compute the previous (t-1) latent
             // sample given the predicted noise and current sample
@@ -314,12 +324,27 @@ public struct StableDiffusionXLPipeline: StableDiffusionPipelineProtocol {
     func generateConditioning(using config: Configuration, forRefiner: Bool = false) throws -> ModelInputs {
         // Encode the input prompt and negative prompt
         let (promptEmbedding, pooled) = try encodePrompt(config.prompt, forRefiner: forRefiner)
-        let (negativePromptEmbedding, negativePooled) = try encodePrompt(config.negativePrompt, forRefiner: forRefiner)
 
-        // Convert to Unet hidden state representation
-        // Concatenate the prompt and negative prompt embeddings
-        let hiddenStates = toHiddenStates(MLShapedArray(concatenating: [negativePromptEmbedding, promptEmbedding], alongAxis: 0))
-        let pooledStates = MLShapedArray(concatenating: [negativePooled, pooled], alongAxis: 0)
+        let hiddenStates: MLShapedArray<Float32>
+        let pooledStates: MLShapedArray<Float32>
+        if config.useClassifierFreeGuidance {
+            let (negativePromptEmbedding, negativePooled) = try encodePrompt(config.negativePrompt, forRefiner: forRefiner)
+            hiddenStates = toHiddenStates(
+                makeConditioningBatch(
+                    positive: promptEmbedding,
+                    negative: negativePromptEmbedding,
+                    useClassifierFreeGuidance: true
+                )
+            )
+            pooledStates = makeConditioningBatch(
+                positive: pooled,
+                negative: negativePooled,
+                useClassifierFreeGuidance: true
+            )
+        } else {
+            hiddenStates = toHiddenStates(promptEmbedding)
+            pooledStates = pooled
+        }
 
         // Inline helper functions for geometry creation
         func refinerGeometry() -> MLShapedArray<Float32> {
@@ -339,7 +364,12 @@ public struct StableDiffusionXLPipeline: StableDiffusionPipelineProtocol {
                 ],
                 shape: [1, 5]
             )
-            return MLShapedArray<Float32>(concatenating: [negativeGeometry, positiveGeometry], alongAxis: 0)
+            guard config.useClassifierFreeGuidance else { return positiveGeometry }
+            return makeConditioningBatch(
+                positive: positiveGeometry,
+                negative: negativeGeometry,
+                useClassifierFreeGuidance: true
+            )
         }
 
         func baseGeometry() -> MLShapedArray<Float32> {
@@ -353,7 +383,11 @@ public struct StableDiffusionXLPipeline: StableDiffusionPipelineProtocol {
                 // Remove once model input shapes are ubiquitous
                 shape: unet.latentTimeIdShape.count > 1 ? [1, 6] : [6]
             )
-            return MLShapedArray<Float32>(concatenating: [geometry, geometry], alongAxis: 0)
+            return makeConditioningBatch(
+                positive: geometry,
+                negative: geometry,
+                useClassifierFreeGuidance: config.useClassifierFreeGuidance
+            )
         }
 
         let geometry = forRefiner ? refinerGeometry() : baseGeometry()

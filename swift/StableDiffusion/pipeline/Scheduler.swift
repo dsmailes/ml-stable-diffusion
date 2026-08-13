@@ -30,6 +30,12 @@ public protocol Scheduler {
     /// Standard deviation of the initial noise distribution
     var initNoiseSigma: Float { get }
 
+    /// Scale a latent sample before the denoising model predicts its residual.
+    func scaleModelInput(
+        _ sample: MLShapedArray<Float32>,
+        timeStep: Int
+    ) -> MLShapedArray<Float32>
+
     /// Denoised latents
     var modelOutputs: [MLShapedArray<Float32>] { get }
 
@@ -52,6 +58,11 @@ public protocol Scheduler {
 @available(iOS 16.2, macOS 13.1, *)
 public extension Scheduler {
     var initNoiseSigma: Float { 1 }
+
+    func scaleModelInput(
+        _ sample: MLShapedArray<Float32>,
+        timeStep: Int
+    ) -> MLShapedArray<Float32> { sample }
 }
 
 @available(iOS 16.2, macOS 13.1, *)

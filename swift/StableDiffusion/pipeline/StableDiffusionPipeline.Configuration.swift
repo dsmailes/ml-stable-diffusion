@@ -36,6 +36,9 @@ public struct PipelineConfiguration: Hashable {
     public var seed: UInt32 = 0
     /// Controls the influence of the text prompt on sampling process (0=random images)
     public var guidanceScale: Float = 7.5
+    /// Whether to run the negative-prompt classifier-free-guidance batch.
+    /// Disable this for distilled batch-one models such as SDXL-Lightning.
+    public var useClassifierFreeGuidance: Bool = true
     /// List of Images for available ControlNet Models
     public var controlNetInputs: [CGImage] = []
     /// Safety checks are only performed if `self.canSafetyCheck && !disableSafety`
