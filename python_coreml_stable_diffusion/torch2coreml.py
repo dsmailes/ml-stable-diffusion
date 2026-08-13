@@ -137,6 +137,30 @@ def _cast_floating_inputs_to_module_dtype(inputs, module):
     return converted_inputs
 
 
+def _trace_module_on_device(module, sample_inputs, trace_device):
+    device_name = trace_device.lower()
+    if device_name == "mps" and not torch.backends.mps.is_available():
+        raise RuntimeError("MPS tracing was requested but MPS is unavailable")
+
+    device = torch.device(device_name)
+    module = module.to(device)
+    device_inputs = [value.to(device) for value in sample_inputs]
+    traced_module = torch.jit.trace(
+        module,
+        device_inputs,
+        check_trace=False,
+    )
+
+    module.to_empty(device=torch.device("meta"))
+    del device_inputs
+    traced_module = traced_module.cpu()
+
+    if device_name == "mps":
+        torch.mps.empty_cache()
+
+    return traced_module
+
+
 def _load_unet_checkpoint(unet_model, checkpoint_path):
     if not os.path.isfile(checkpoint_path):
         raise FileNotFoundError(
@@ -888,13 +912,23 @@ def convert_unet(pipe, args, model_name = None):
         logger.info(f"Sample UNet inputs spec: {sample_unet_inputs_spec}")
 
         if not args.check_output_correctness:
-            del pipe.unet
+            for component_name in (
+                "unet",
+                "vae",
+                "text_encoder",
+                "text_encoder_2",
+            ):
+                if hasattr(pipe, component_name):
+                    delattr(pipe, component_name)
             gc.collect()
 
         # JIT trace
-        logger.info("JIT tracing..")
-        reference_unet = torch.jit.trace(reference_unet,
-                                         list(sample_unet_inputs.values()))
+        logger.info(f"JIT tracing on {args.trace_device}..")
+        reference_unet = _trace_module_on_device(
+            reference_unet,
+            list(sample_unet_inputs.values()),
+            args.trace_device,
+        )
         logger.info("Done.")
 
         if args.check_output_correctness:
@@ -1522,6 +1556,15 @@ def parser_spec():
                         choices=tuple(cu
                                       for cu in ct.ComputeUnit._member_names_),
                         default="ALL")
+    parser.add_argument(
+        "--trace-device",
+        choices=("CPU", "MPS"),
+        default="CPU",
+        help=(
+            "The PyTorch device used for JIT tracing. MPS allows FP16 "
+            "convolutions while reducing host memory during large conversions."
+        ),
+    )
     parser.add_argument(
         "--latent-h",
         type=int,

@@ -33,6 +33,16 @@ class TestSDXLLightningConversion(unittest.TestCase):
 
         self.assertEqual(args.unet_batch_size, 1)
 
+    def test_trace_device_can_select_mps(self):
+        args = torch2coreml.parser_spec().parse_args([
+            "--model-version",
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            "--trace-device",
+            "MPS",
+        ])
+
+        self.assertEqual(args.trace_device, "MPS")
+
     def test_batch_one_sdxl_time_ids_contain_only_positive_conditioning(self):
         negative = [1, 2, 3, 4, 5, 6]
         positive = [7, 8, 9, 10, 11, 12]
@@ -166,6 +176,21 @@ class TestSDXLLightningConversion(unittest.TestCase):
         self.assertEqual(converted.dtype, torch.float16)
         self.assertEqual(embedding.dtype, torch.float32)
         self.assertEqual(converted.shape, embedding.shape)
+
+    @unittest.skipUnless(torch.backends.mps.is_available(), "MPS is unavailable")
+    def test_fp16_module_can_be_traced_on_mps_and_returned_to_cpu(self):
+        module = torch.nn.Conv2d(4, 8, 3, padding=1).to(dtype=torch.float16)
+        sample = torch.rand(1, 4, 8, 8, dtype=torch.float16)
+
+        traced = torch2coreml._trace_module_on_device(
+            module,
+            [sample],
+            "MPS",
+        )
+
+        parameter = next(traced.parameters())
+        self.assertEqual(parameter.device.type, "cpu")
+        self.assertEqual(parameter.dtype, torch.float16)
 
     @mock.patch.object(torch2coreml.DiffusionPipeline, "from_pretrained")
     def test_pipeline_download_uses_pinned_base_revision(self, from_pretrained_mock):
