@@ -153,6 +153,7 @@ class TestSDXLLightningConversion(unittest.TestCase):
             from_pretrained_mock.call_args.kwargs["revision"],
             "462165984030d82259a11f4367a4eed129e94a7b",
         )
+        self.assertNotIn("use_auth_token", from_pretrained_mock.call_args.kwargs)
 
     def test_model_revision_argument_captures_pinned_source(self):
         args = torch2coreml.parser_spec().parse_args([

@@ -1365,16 +1365,14 @@ def get_pipeline(args):
                                             use_safetensors=True,
                                             vae=vae,
                                             **pipeline_overrides,
-                                            **download_options,
-                                            use_auth_token=True)
+                                            **download_options)
     else:
         pipe = DiffusionPipeline.from_pretrained(model_version,
                                             torch_dtype=torch.float16,
                                             variant="fp16",
                                             use_safetensors=True,
                                             **pipeline_overrides,
-                                            **download_options,
-                                            use_auth_token=True)
+                                            **download_options)
 
     logger.info(f"Done. Pipeline in effect: {pipe.__class__.__name__}")
 
