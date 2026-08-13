@@ -58,6 +58,7 @@ class TestSDXLLightningConversion(unittest.TestCase):
             "stabilityai/stable-diffusion-xl-base-1.0",
         ])
 
+        self.assertIsNone(args.model_revision)
         self.assertIsNone(args.unet_checkpoint)
         self.assertIsNone(args.unet_model_version)
 
@@ -102,6 +103,33 @@ class TestSDXLLightningConversion(unittest.TestCase):
             device="cpu",
         )
         unet.load_state_dict.assert_called_once_with(state_dict, strict=True)
+
+    @mock.patch.object(torch2coreml.DiffusionPipeline, "from_pretrained")
+    def test_pipeline_download_uses_pinned_base_revision(self, from_pretrained_mock):
+        args = torch2coreml.parser_spec().parse_args([
+            "--model-version",
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            "--model-revision",
+            "462165984030d82259a11f4367a4eed129e94a7b",
+        ])
+
+        torch2coreml.get_pipeline(args)
+
+        from_pretrained_mock.assert_called_once()
+        self.assertEqual(
+            from_pretrained_mock.call_args.kwargs["revision"],
+            "462165984030d82259a11f4367a4eed129e94a7b",
+        )
+
+    def test_model_revision_argument_captures_pinned_source(self):
+        args = torch2coreml.parser_spec().parse_args([
+            "--model-version",
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            "--model-revision",
+            "462165984030d82259a11f4367a4eed129e94a7b",
+        ])
+
+        self.assertEqual(args.model_revision, "462165984030d82259a11f4367a4eed129e94a7b")
 
     def test_sdxl_time_ids_reject_unsupported_batch_size(self):
         with self.assertRaisesRegex(ValueError, "UNet batch size"):

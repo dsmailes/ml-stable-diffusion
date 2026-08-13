@@ -1307,12 +1307,17 @@ def convert_controlnet(pipe, args):
 def get_pipeline(args):
     model_version = args.model_version
 
+    download_options = {}
+    if getattr(args, "model_revision", None):
+        download_options["revision"] = args.model_revision
+
     unet_model = None
     if getattr(args, "unet_checkpoint", None):
         logger.info("Initializing replacement UNet from base model configuration")
         unet_model = UNet2DConditionModel.from_config(
             model_version,
             subfolder="unet",
+            **download_options,
         ).to(dtype=torch.float16)
         _load_unet_checkpoint(unet_model, args.unet_checkpoint)
 
@@ -1330,6 +1335,7 @@ def get_pipeline(args):
                                             use_safetensors=True,
                                             vae=vae,
                                             **pipeline_overrides,
+                                            **download_options,
                                             use_auth_token=True)
     else:
         pipe = DiffusionPipeline.from_pretrained(model_version,
@@ -1337,6 +1343,7 @@ def get_pipeline(args):
                                             variant="fp16",
                                             use_safetensors=True,
                                             **pipeline_overrides,
+                                            **download_options,
                                             use_auth_token=True)
 
     logger.info(f"Done. Pipeline in effect: {pipe.__class__.__name__}")
@@ -1443,6 +1450,14 @@ def parser_spec():
         ("The pre-trained model checkpoint and configuration to restore. "
          "For available versions: https://huggingface.co/models?search=stable-diffusion"
          ))
+    parser.add_argument(
+        "--model-revision",
+        default=None,
+        help=(
+            "An immutable Hugging Face revision for --model-version. "
+            "Omit to preserve the upstream default branch behaviour."
+        ),
+    )
     parser.add_argument(
         "--refiner-version",
         default=None,
