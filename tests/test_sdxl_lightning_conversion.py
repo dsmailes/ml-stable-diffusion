@@ -192,6 +192,25 @@ class TestSDXLLightningConversion(unittest.TestCase):
         self.assertEqual(parameter.device.type, "cpu")
         self.assertEqual(parameter.dtype, torch.float16)
 
+    def test_only_conditioning_embeddings_are_promoted_to_float32(self):
+        module = torch.nn.Module()
+        module.time_embedding = torch.nn.Linear(4, 4).to(dtype=torch.float16)
+        module.add_embedding = torch.nn.Linear(4, 4).to(dtype=torch.float16)
+        module.conv_in = torch.nn.Conv2d(4, 4, 1).to(dtype=torch.float16)
+
+        torch2coreml._promote_conditioning_embeddings_to_float32(module)
+
+        self.assertEqual(module.time_embedding.weight.dtype, torch.float32)
+        self.assertEqual(module.add_embedding.weight.dtype, torch.float32)
+        self.assertEqual(module.conv_in.weight.dtype, torch.float16)
+
+        inputs = {"sample": torch.rand(1, 4, 8, 8)}
+        converted = torch2coreml._cast_floating_inputs_to_module_dtype(
+            inputs,
+            module,
+        )
+        self.assertEqual(converted["sample"].dtype, torch.float16)
+
     @mock.patch.object(torch2coreml.DiffusionPipeline, "from_pretrained")
     def test_pipeline_download_uses_pinned_base_revision(self, from_pretrained_mock):
         args = torch2coreml.parser_spec().parse_args([

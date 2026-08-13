@@ -128,8 +128,19 @@ def _materialize_module_from_state_dict(module, state_dict):
     return load_state_dict_summary
 
 
+def _promote_conditioning_embeddings_to_float32(module):
+    for component_name in ("time_embedding", "add_embedding"):
+        component = getattr(module, component_name, None)
+        if component is not None:
+            component.to(dtype=torch.float32)
+
+
 def _cast_floating_inputs_to_module_dtype(inputs, module):
-    module_dtype = next(module.parameters()).dtype
+    input_layer = getattr(module, "conv_in", None)
+    if input_layer is None:
+        module_dtype = next(module.parameters()).dtype
+    else:
+        module_dtype = next(input_layer.parameters()).dtype
     converted_inputs = inputs.copy()
     for name, value in inputs.items():
         if isinstance(value, torch.Tensor) and torch.is_floating_point(value):
@@ -860,6 +871,7 @@ def convert_unet(pipe, args, model_name = None):
             reference_unet,
             source_state_dict,
         )
+        _promote_conditioning_embeddings_to_float32(reference_unet)
         del source_state_dict
 
         if args.unet_support_controlnet:

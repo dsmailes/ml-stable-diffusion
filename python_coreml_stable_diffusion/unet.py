@@ -974,8 +974,12 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin):
         *additional_residuals,
     ):
         # 0. Project (or look-up) time embeddings
-        t_emb = _match_tensor_dtype(self.time_proj(timestep), sample)
+        t_emb = _match_tensor_dtype(
+            self.time_proj(timestep),
+            self.time_embedding.linear_1.weight,
+        )
         emb = self.time_embedding(t_emb)
+        emb = _match_tensor_dtype(emb, sample)
 
         # 1. center input if necessary
         if self.config.center_input_sample:
@@ -1056,7 +1060,10 @@ class UNet2DConditionModelXL(UNet2DConditionModel):
         *additional_residuals,
     ):
         # 0. Project time embeddings
-        t_emb = _match_tensor_dtype(self.time_proj(timestep), sample)
+        t_emb = _match_tensor_dtype(
+            self.time_proj(timestep),
+            self.time_embedding.linear_1.weight,
+        )
         emb = self.time_embedding(t_emb)
 
         aug_emb = None
@@ -1069,11 +1076,13 @@ class UNet2DConditionModelXL(UNet2DConditionModel):
             assert time_ids is not None
             assert text_embeds is not None
 
+            add_embedding_weight = self.add_embedding.linear_1.weight
             time_embeds = _match_tensor_dtype(
                 self.add_time_proj(time_ids.flatten()),
-                text_embeds,
+                add_embedding_weight,
             )
             time_embeds = time_embeds.reshape((text_embeds.shape[0], -1))
+            text_embeds = _match_tensor_dtype(text_embeds, add_embedding_weight)
 
             add_embeds = torch.concat([text_embeds, time_embeds], dim=-1)
             aug_emb = self.add_embedding(add_embeds)
@@ -1082,7 +1091,8 @@ class UNet2DConditionModelXL(UNet2DConditionModel):
         elif self.config.addition_embed_type == "image_hint":
             raise NotImplementedError
 
-        emb = emb + aug_emb if aug_emb is not None else emb
+        emb = _match_tensor_dtype(
+            emb + aug_emb if aug_emb is not None else emb, sample)
 
         # 1. center input if necessary
         if self.config.center_input_sample:
