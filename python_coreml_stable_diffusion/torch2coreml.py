@@ -97,6 +97,18 @@ def _get_out_path(args, submodule_name):
     return os.path.join(args.o, fname)
 
 
+def _get_sdxl_time_ids(negative_time_ids, positive_time_ids, batch_size):
+    if batch_size == 1:
+        return [positive_time_ids]
+
+    if batch_size == 2:
+        return [negative_time_ids, positive_time_ids]
+
+    raise ValueError(
+        f"UNet batch size must be 1 or 2; received {batch_size}"
+    )
+
+
 def _convert_to_coreml(submodule_name, torchscript_module, sample_inputs,
                        output_names, args, out_path=None, precision=None, compute_unit=None):
 
@@ -682,7 +694,7 @@ def convert_unet(pipe, args, model_name = None):
     # If original Unet does not exist, export it from PyTorch+diffusers
     elif not os.path.exists(out_path):
         # Prepare sample input shapes and values
-        batch_size = 2  # for classifier-free guidance
+        batch_size = args.unet_batch_size
         sample_shape = (
             batch_size,                    # B
             pipe.unet.config.in_channels,  # C
@@ -750,10 +762,11 @@ def convert_unet(pipe, args, model_name = None):
                 add_time_ids = list(original_size + crops_coords_top_left + target_size)
                 add_neg_time_ids = list(original_size + crops_coords_top_left + target_size)
 
-            time_ids = [
+            time_ids = _get_sdxl_time_ids(
                 add_neg_time_ids,
-                add_time_ids
-            ]
+                add_time_ids,
+                batch_size,
+            )
 
             # Pooled text embedding from text_encoder_2
             text_embeds_shape = (
@@ -1448,6 +1461,16 @@ def parser_spec():
         default=None,
         help=
         "The hidden size for the text encoder. `Defaults to pipe.text_encoder.config.hidden_size`",
+    )
+    parser.add_argument(
+        "--unet-batch-size",
+        choices=(1, 2),
+        default=2,
+        type=int,
+        help=(
+            "The fixed Core ML UNet batch size. Use 1 for distilled models "
+            "that do not use classifier-free guidance; defaults to 2."
+        ),
     )
     parser.add_argument(
         "--attention-implementation",
