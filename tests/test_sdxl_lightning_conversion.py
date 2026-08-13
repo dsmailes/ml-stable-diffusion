@@ -268,6 +268,54 @@ class TestSDXLLightningConversion(unittest.TestCase):
 
         self.assertEqual(args.model_revision, "462165984030d82259a11f4367a4eed129e94a7b")
 
+    def test_custom_vae_revision_argument_captures_pinned_source(self):
+        args = torch2coreml.parser_spec().parse_args([
+            "--model-version",
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            "--custom-vae-version",
+            "madebyollin/sdxl-vae-fp16-fix",
+            "--custom-vae-revision",
+            "207b116dae70ace3637169f1ddd2434b91b3a8cd",
+        ])
+
+        self.assertEqual(
+            args.custom_vae_revision,
+            "207b116dae70ace3637169f1ddd2434b91b3a8cd",
+        )
+
+    @mock.patch.object(torch2coreml.DiffusionPipeline, "from_pretrained")
+    @mock.patch("diffusers.AutoencoderKL.from_pretrained")
+    def test_custom_vae_download_uses_its_own_pinned_revision(
+        self,
+        vae_from_pretrained_mock,
+        pipeline_from_pretrained_mock,
+    ):
+        args = torch2coreml.parser_spec().parse_args([
+            "--model-version",
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            "--model-revision",
+            "462165984030d82259a11f4367a4eed129e94a7b",
+            "--custom-vae-version",
+            "madebyollin/sdxl-vae-fp16-fix",
+            "--custom-vae-revision",
+            "207b116dae70ace3637169f1ddd2434b91b3a8cd",
+        ])
+        vae = object()
+        vae_from_pretrained_mock.return_value = vae
+
+        torch2coreml.get_pipeline(args)
+
+        vae_from_pretrained_mock.assert_called_once_with(
+            "madebyollin/sdxl-vae-fp16-fix",
+            torch_dtype=torch.float16,
+            revision="207b116dae70ace3637169f1ddd2434b91b3a8cd",
+        )
+        self.assertEqual(
+            pipeline_from_pretrained_mock.call_args.kwargs["revision"],
+            "462165984030d82259a11f4367a4eed129e94a7b",
+        )
+        self.assertIs(pipeline_from_pretrained_mock.call_args.kwargs["vae"], vae)
+
     def test_sdxl_time_ids_reject_unsupported_batch_size(self):
         with self.assertRaisesRegex(ValueError, "UNet batch size"):
             torch2coreml._get_sdxl_time_ids([], [], batch_size=3)

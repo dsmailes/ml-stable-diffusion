@@ -1434,7 +1434,13 @@ def get_pipeline(args):
     logger.info(f"Initializing DiffusionPipeline with {model_version}..")
     if args.custom_vae_version:
         from diffusers import AutoencoderKL
-        vae = AutoencoderKL.from_pretrained(args.custom_vae_version, torch_dtype=torch.float16)
+        custom_vae_options = {}
+        if getattr(args, "custom_vae_revision", None):
+            custom_vae_options["revision"] = args.custom_vae_revision
+        vae = AutoencoderKL.from_pretrained(
+            args.custom_vae_version,
+            torch_dtype=torch.float16,
+            **custom_vae_options)
         pipe = DiffusionPipeline.from_pretrained(model_version,
                                             torch_dtype=torch.float16,
                                             variant="fp16",
@@ -1580,6 +1586,14 @@ def parser_spec():
          "If specified, the specified VAE will be converted instead of the one associated to the `--model-version` checkpoint. "
          "No precision override is applied when using a custom VAE."
          ))
+    parser.add_argument(
+        "--custom-vae-revision",
+        default=None,
+        help=(
+            "An immutable Hugging Face revision for --custom-vae-version. "
+            "Omit to preserve the upstream default branch behaviour."
+        ),
+    )
     parser.add_argument("--compute-unit",
                         choices=tuple(cu
                                       for cu in ct.ComputeUnit._member_names_),
