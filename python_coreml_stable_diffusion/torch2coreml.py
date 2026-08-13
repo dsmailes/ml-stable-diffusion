@@ -14,11 +14,13 @@ import coremltools as ct
 from diffusers import (
     StableDiffusionPipeline,
     DiffusionPipeline,
-    ControlNetModel
+    ControlNetModel,
+    UNet2DConditionModel,
 )
 import gc
 
 import logging
+from safetensors.torch import load_file
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -107,6 +109,19 @@ def _get_sdxl_time_ids(negative_time_ids, positive_time_ids, batch_size):
     raise ValueError(
         f"UNet batch size must be 1 or 2; received {batch_size}"
     )
+
+
+def _load_unet_checkpoint(unet_model, checkpoint_path):
+    if not os.path.isfile(checkpoint_path):
+        raise FileNotFoundError(
+            f"UNet checkpoint does not exist: {checkpoint_path}"
+        )
+
+    logger.info(f"Loading UNet checkpoint from {checkpoint_path}")
+    state_dict = load_file(checkpoint_path, device="cpu")
+    load_state_dict_summary = unet_model.load_state_dict(state_dict, strict=True)
+    logger.info(f"Loaded UNet checkpoint: {load_state_dict_summary}")
+    del state_dict
 
 
 def _convert_to_coreml(submodule_name, torchscript_module, sample_inputs,
@@ -694,7 +709,7 @@ def convert_unet(pipe, args, model_name = None):
     # If original Unet does not exist, export it from PyTorch+diffusers
     elif not os.path.exists(out_path):
         # Prepare sample input shapes and values
-        batch_size = args.unet_batch_size
+        batch_size = getattr(args, "unet_batch_size", 2)
         sample_shape = (
             batch_size,                    # B
             pipe.unet.config.in_channels,  # C
@@ -862,15 +877,16 @@ def convert_unet(pipe, args, model_name = None):
         gc.collect()
 
         # Set model metadata
-        coreml_unet.author = f"Please refer to the Model Card available at huggingface.co/{args.model_version}"
+        unet_model_version = getattr(args, "unet_model_version", None) or args.model_version
+        coreml_unet.author = f"Please refer to the Model Card available at huggingface.co/{unet_model_version}"
         if args.xl_version:
             coreml_unet.license = "OpenRAIL++-M (https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/LICENSE.md)"
         else:
             coreml_unet.license = "OpenRAIL (https://huggingface.co/spaces/CompVis/stable-diffusion-license)"
-        coreml_unet.version = args.model_version if model_name != "refiner" or not hasattr(args, "refiner_version") else args.refiner_version
+        coreml_unet.version = unet_model_version if model_name != "refiner" or not hasattr(args, "refiner_version") else args.refiner_version
         coreml_unet.short_description = \
             "Stable Diffusion generates images conditioned on text or other images as input through the diffusion process. " \
-            "Please refer to https://arxiv.org/abs/2112.10752 for details."
+            f"Please refer to {'https://arxiv.org/abs/2402.13929' if getattr(args, 'unet_model_version', None) else 'https://arxiv.org/abs/2112.10752'} for details."
 
         # Set the input descriptions
         coreml_unet.input_description["sample"] = \
@@ -1291,6 +1307,19 @@ def convert_controlnet(pipe, args):
 def get_pipeline(args):
     model_version = args.model_version
 
+    unet_model = None
+    if getattr(args, "unet_checkpoint", None):
+        logger.info("Initializing replacement UNet from base model configuration")
+        unet_model = UNet2DConditionModel.from_config(
+            model_version,
+            subfolder="unet",
+        ).to(dtype=torch.float16)
+        _load_unet_checkpoint(unet_model, args.unet_checkpoint)
+
+    pipeline_overrides = {}
+    if unet_model is not None:
+        pipeline_overrides["unet"] = unet_model
+
     logger.info(f"Initializing DiffusionPipeline with {model_version}..")
     if args.custom_vae_version:
         from diffusers import AutoencoderKL
@@ -1300,12 +1329,14 @@ def get_pipeline(args):
                                             variant="fp16",
                                             use_safetensors=True,
                                             vae=vae,
+                                            **pipeline_overrides,
                                             use_auth_token=True)
     else:
         pipe = DiffusionPipeline.from_pretrained(model_version,
                                             torch_dtype=torch.float16,
                                             variant="fp16",
                                             use_safetensors=True,
+                                            **pipeline_overrides,
                                             use_auth_token=True)
 
     logger.info(f"Done. Pipeline in effect: {pipe.__class__.__name__}")
@@ -1461,6 +1492,22 @@ def parser_spec():
         default=None,
         help=
         "The hidden size for the text encoder. `Defaults to pipe.text_encoder.config.hidden_size`",
+    )
+    parser.add_argument(
+        "--unet-checkpoint",
+        default=None,
+        help=(
+            "A local safetensors state dictionary that replaces the base "
+            "pipeline UNet before conversion."
+        ),
+    )
+    parser.add_argument(
+        "--unet-model-version",
+        default=None,
+        help=(
+            "The model-card identifier recorded in Core ML metadata when "
+            "--unet-checkpoint is used."
+        ),
     )
     parser.add_argument(
         "--unet-batch-size",

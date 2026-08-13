@@ -4,6 +4,7 @@
 #
 
 import unittest
+from unittest import mock
 
 from python_coreml_stable_diffusion import torch2coreml
 
@@ -50,6 +51,57 @@ class TestSDXLLightningConversion(unittest.TestCase):
         )
 
         self.assertEqual(result, [negative, positive])
+
+    def test_unet_checkpoint_arguments_are_optional(self):
+        args = torch2coreml.parser_spec().parse_args([
+            "--model-version",
+            "stabilityai/stable-diffusion-xl-base-1.0",
+        ])
+
+        self.assertIsNone(args.unet_checkpoint)
+        self.assertIsNone(args.unet_model_version)
+
+    def test_unet_checkpoint_arguments_capture_pinned_source(self):
+        args = torch2coreml.parser_spec().parse_args([
+            "--model-version",
+            "stabilityai/stable-diffusion-xl-base-1.0",
+            "--unet-checkpoint",
+            "/models/sdxl_lightning_4step_unet.safetensors",
+            "--unet-model-version",
+            "ByteDance/SDXL-Lightning@c9a24f48",
+        ])
+
+        self.assertEqual(
+            args.unet_checkpoint,
+            "/models/sdxl_lightning_4step_unet.safetensors",
+        )
+        self.assertEqual(
+            args.unet_model_version,
+            "ByteDance/SDXL-Lightning@c9a24f48",
+        )
+
+    @mock.patch(
+        "python_coreml_stable_diffusion.torch2coreml.load_file",
+        create=True,
+    )
+    @mock.patch.object(torch2coreml.os.path, "isfile", return_value=True)
+    def test_unet_checkpoint_is_loaded_strictly_on_cpu(
+        self,
+        isfile_mock,
+        load_file_mock,
+    ):
+        unet = mock.Mock()
+        state_dict = {"down_blocks.0.weight": object()}
+        load_file_mock.return_value = state_dict
+
+        torch2coreml._load_unet_checkpoint(unet, "/models/lightning.safetensors")
+
+        isfile_mock.assert_called_once_with("/models/lightning.safetensors")
+        load_file_mock.assert_called_once_with(
+            "/models/lightning.safetensors",
+            device="cpu",
+        )
+        unet.load_state_dict.assert_called_once_with(state_dict, strict=True)
 
     def test_sdxl_time_ids_reject_unsupported_batch_size(self):
         with self.assertRaisesRegex(ValueError, "UNet batch size"):
